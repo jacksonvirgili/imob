@@ -7,12 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1KPHODW39oyJqMIqEkt0qrUaFijFqbZdJ
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-
-
 # =====================
 # CONFIGURAÇÃO DA PÁGINA
 # =====================
@@ -67,12 +61,23 @@ for c in colunas_esperadas:
 df['CEP'] = df['CEP'].astype(str).str.zfill(8)
 df['Criação'] = pd.to_datetime(df['Criação'], errors='coerce', dayfirst=True)
 df['Última atualização'] = pd.to_datetime(df['Última atualização'], errors='coerce', dayfirst=True)
+df['dias'] = (pd.to_datetime('today') - df['Criação']).dt.days
+df['visualizacoes_dia'] = (df['Total de visualizações'] / df['dias']).round(0).astype(int)
+df['contatos_mes'] = (df['Total de contatos'] / df['dias'] * 30).round(0).astype(int)
+
+
 
 df['taxa_conversão'] = np.where(
     df['Total de visualizações'] > 0,
     (df['Total de contatos'] / df['Total de visualizações']) * 100,
-    0
-)
+    np.nan
+).round(2)
+
+df['tx_conversão/dia'] = np.where(
+    (df['Total de visualizações'] > 0) & (df['dias'] > 0),
+    (df['Total de contatos'] / (df['Total de visualizações'] * df['dias'])) * 100,
+    np.nan
+).round(2)
 
 # =====================
 # GAUGE — TAXA DE CONVERSÃO GERAL (RÁPIDO)
@@ -117,14 +122,14 @@ base = df.copy()
 # =====================
 # KPIs PRINCIPAIS
 # =====================
-total_visualizacoes = base['Total de visualizações'].sum()
-total_contatos = base['Total de contatos'].sum()
+total_visualizacoes = base['visualizacoes_dia'].sum()
+total_contatos = base['contatos_mes'].sum()
 aluguel = base['Valor do aluguel'].count()
 
 m1, k1, k2, k3, k4, m2 = st.columns([2, 2, 2, 2, 2, 1])
 
-k1.metric("Visualizações", f"{total_visualizacoes:,}".replace(",", "."))
-k2.metric("Contatos", f"{total_contatos:,}".replace(",", "."))
+k1.metric("Visualizações/dia", f"{total_visualizacoes:,}".replace(",", "."))
+k2.metric("Contatos/mês", f"{total_contatos:,}".replace(",", "."))
 k3.metric("Anúncios Ativos", len(base))
 k4.metric("Aluguéis", f"{aluguel:,}".replace(",", "."))
 
@@ -238,12 +243,19 @@ def estilo_taxa_conversao(val):
     else:
         return "color: green; font-weight: bold;"
 
+def estilo_eficiência(val):
+    if val < 0.02:
+        return "color: red; font-weight: bold;"
+    elif 0.06 <= val <= 0.1:
+        return "color: orange; font-weight: bold;"
+    else:
+        return "color: green; font-weight: bold;"
 
 def estilo_visualizacoes(val, tipo):
     limites = {
-        "Destaque Premium": 300,
-        "Destaque": 200,
-        "Padrão": 100
+        "Destaque Premium": 3,
+        "Destaque": 2,
+        "Padrão": 1
     }
     limite = limites.get(tipo, 0)
     if val < limite:
@@ -276,12 +288,13 @@ colunas_exibicao = [
     'Cidade',
     'Valor de Venda',
     'Valor do aluguel',
-    'Número de fotos',
-    'Vídeo',
     'Total de visualizações',
     'Total de contatos',
-    'Última atualização',
-    'taxa_conversão'
+    'dias',
+    'visualizacoes_dia',
+    'contatos_mes',
+    'taxa_conversão',
+    'tx_conversão/dia'
 ]
 
 
@@ -308,26 +321,36 @@ if st.session_state.visao in mapa:
 
     if recebeu_contato:
         # 🔹 Tabelas que receberam contato
-        tabela = tabela.sort_values(by='taxa_conversão', ascending=False)
+        tabela = tabela.sort_values(by='tx_conversão/dia', ascending=False)
 
-        st.dataframe(
+        styled_table = (
             tabela.style
             .format({
                 'Valor de Venda': formato_moeda,
                 'Valor do aluguel': formato_moeda,
-                'taxa_conversão': formato_percentual
+                'taxa_conversão': formato_percentual,
+                'tx_conversão/dia': formato_percentual
             })
             .applymap(
                 estilo_taxa_conversao,
                 subset=['taxa_conversão']
-            ),
+            )
+            .applymap(
+                estilo_eficiência,
+                subset=['tx_conversão/dia']
+            )
+        )
+
+        st.dataframe(
+            styled_table,
             use_container_width=True,
             hide_index=True
         )
 
+
     else:
         # 🔹 Tabelas que NÃO receberam contato
-        tabela = tabela.sort_values(by='Total de visualizações', ascending=False)
+        tabela = tabela.sort_values(by='visualizacoes_dia', ascending=False)
 
         st.dataframe(
             tabela.style
@@ -338,8 +361,8 @@ if st.session_state.visao in mapa:
             })
             .apply(
                 lambda row: [
-                    estilo_visualizacoes(row['Total de visualizações'], row['Tipo do anúncio'])
-                    if col == 'Total de visualizações' else ""
+                    estilo_visualizacoes(row['visualizacoes_dia'], row['Tipo do anúncio'])
+                    if col == 'visualizacoes_dia' else ""
                     for col in tabela.columns
                 ],
                 axis=1
